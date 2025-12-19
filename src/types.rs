@@ -36,7 +36,7 @@ impl std::fmt::Display for TypeValue {
             TypeValue::Bool => write!(f, "Bool"),
             TypeValue::Function(func) => unsafe { write!(f, "Function(\"{}\")", (**func).name) },
             TypeValue::Class(class) => unsafe { write!(f, "Class(\"{}\")", (**class).name) },
-            TypeValue::Type(t) => write!(f, "Type"),
+            TypeValue::Type(_) => write!(f, "Type"),
         }
     }
 }
