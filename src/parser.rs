@@ -10,6 +10,8 @@ enum ParseError {
     UnknownOperator(char),
     #[error("Invalid token found")]
     InvalidToken,
+    #[error("Unclosed Parenthesis")]
+    UnclosedParenthesis
 }
 
 #[derive(Debug, Clone)]
@@ -49,6 +51,22 @@ enum Operator {
     Bang,
 }
 
+impl std::fmt::Display for Operator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let c = match self {
+            Operator::Plus  => '+',
+            Operator::Minus => '-',
+            Operator::Star  => '*',
+            Operator::Slash => '/',
+            Operator::Pipe  => '|',
+            Operator::Ampersand => '&',
+            Operator::Bang  => '!',
+        };
+
+        write!(f, "{}", c)
+    }
+}
+
 enum Expression {
     Number(*const str),
     Operation(Operation),
@@ -58,17 +76,29 @@ impl Expression {
     fn evaluate(&self) -> Result<Value, ValueError> {
         match self {
             Expression::Number(s) => {
-                unsafe {
-                    let n = (**s).parse::<f64>().unwrap();
+                let n;
+                unsafe { n = (**s).parse::<f64>().unwrap(); }
 
-                    if n.fract() == 0.0 {
-                        Ok(Value::Int(n as i64))
-                    } else {
-                        Ok(Value::Float(n))
-                    }
+                println!("{}", n);
+
+                if n.fract() == 0.0 {
+                    Ok(Value::Int(n as i64))
+                } else {
+                    Ok(Value::Float(n))
                 }
             },
             Expression::Operation(op) => op.evaluate(),
+        }
+    }
+}
+
+impl std::fmt::Display for Expression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Expression::Number(s) => unsafe { write!(f, "{}", &**s) },
+            Expression::Operation(op) => {
+                write!(f, "({}, {}, {})", op.op, op.expressions[0], op.expressions[1])
+            }
         }
     }
 }
@@ -79,10 +109,16 @@ struct Operation {
 }
 
 impl Operation {
+    fn process<F>(&self, op: F) -> Result<Value, ValueError> where F: Fn(&Value, &Value) -> Result<Value, ValueError> {
+        op(&self.expressions[0].evaluate()?, &self.expressions[1].evaluate()?)
+    }
+
     fn evaluate(&self) -> Result<Value, ValueError> {
         match self.op {
-            Operator::Plus => self.expressions[0].evaluate()?.add(&self.expressions[1].evaluate()?),
-            Operator::Star => self.expressions[0].evaluate()?.mul(&self.expressions[1].evaluate()?),
+            Operator::Plus  => self.process(Value::add),
+            Operator::Minus => self.process(Value::sub),
+            Operator::Star  => self.process(Value::mul),
+            Operator::Slash => self.process(Value::div),
             _ => todo!(),
         }
     }
@@ -119,6 +155,13 @@ pub struct Lexer {
 }
 
 impl Lexer {
+    pub fn new() -> Lexer {
+        Lexer {
+            input: String::new(),
+            tokens: VecDeque::new(),
+        }
+    }
+
     fn next(&mut self) -> Token {
         self.tokens.pop_front().unwrap_or(Token::Eof)
     }
@@ -128,11 +171,14 @@ impl Lexer {
     }
 
     fn parse_expression(&mut self, min_bp: f32) -> Result<Expression, ParseError> {
-        println!("{}", self.peek());
         let mut lhs = match self.next() {
             Token::Number(s) => Expression::Number(s),
             Token::Op(_) => Err(ParseError::InvalidToken)?,
-            Token::LeftParenth => self.parse_expression(0.0)?,
+            Token::LeftParenth => { let expr = self.parse_expression(0.0)?;
+                match self.next() {
+                    Token::RightParenth => expr, _ => return Err(ParseError::UnclosedParenthesis)
+                }
+            },
             _ => Err(ParseError::InvalidToken)?,
         };
 
@@ -236,23 +282,53 @@ impl Lexer {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_expression() -> Result<(), Box<dyn std::error::Error>> {
-        let mut lexer = Lexer { tokens: VecDeque::new(), input: String::new() };
+    fn expression_helper(input: String, expected: &Value, expected_string: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let mut lexer = Lexer::new();
 
-        let input = "2 + 4 * 3".to_owned();
         lexer.tokenize(input);
 
         let expression = lexer.parse_expression(f32::NEG_INFINITY)?;
 
+        assert_eq!(format!("{}", expression), expected_string);
+
         let value = expression.evaluate()?;
 
-        if let Value::Int(n) = value {
-            assert_eq!(n, 14);
-        } else {
-            panic!("Not int");
+        match value.equals(expected) {
+            Ok(true) => Ok(()),
+            Ok(false) => panic!("Values mismatched: {} != {}", value, expected),
+            Err(e) => match e {
+                ValueError::FunctionNotAvailable(_, t1, t2) if t1 != t2 => {
+                    panic!("Mismatched types: {} (expected {})", t1, t2)
+                },
+                _ => Err(Box::new(e)),
+            },
         }
+    }
 
-        Ok(())
+    #[test]
+    fn test_expression() -> Result<(), Box<dyn std::error::Error>> {
+        let input = "2 + 4 * 3".to_owned();
+        expression_helper(input, &Value::Int(14), "(+, 2, (*, 4, 3))")
+    }
+
+    #[test]
+    fn test_multidigit() -> Result<(), Box<dyn std::error::Error>> {
+        let input = "4500 / 50".to_owned();
+        expression_helper(input, &Value::Int(90), "(/, 4500, 50)")
+    }
+
+    #[test]
+    fn test_implicit_conversion() -> Result<(), Box<dyn std::error::Error>> {
+        let input = "2.5 + 3".to_owned();
+        expression_helper(input, &Value::Float(5.5), "(+, 2.5, 3)")?;
+
+        let input = "2 + 3.5".to_owned();
+        expression_helper(input, &Value::Float(5.5), "(+, 2, 3.5)")
+    }
+
+    #[test]
+    fn test_complex_expression() -> Result<(), Box<dyn std::error::Error>> {
+        let input = "(8 + 42 / 7 * 3) / 2 - 5".to_owned();
+        expression_helper(input, &Value::Int(8), "(-, (/, (+, 8, (*, (/, 42, 7), 3)), 2), 5)")
     }
 }
