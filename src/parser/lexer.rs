@@ -102,7 +102,7 @@ impl Lexer {
                 Token::RightParenth => break,
                 Token::Semicolon => break,
                 Token::Eof => Err(ParseError::MissingSemicolon)?,
-                _ => Err(ParseError::InvalidToken)?,
+                _ => Err(ParseError::MissingSemicolon)?,
             };
 
             let bp = get_binding_power(op);
@@ -350,13 +350,12 @@ mod tests {
     }
 
     #[test]
-    #[should_panic = "VariableWithIdentifierNotFound"]
-    fn test_variable_not_found() {
+    #[should_panic = "EqualsExpected"]
+    fn test_equals_expected() {
         let mut lexer = Lexer::new();
         
         let input = indoc! {"
-            let x = 5 * 2;
-            let y = x * a;
+            let x a;
         "}.to_owned();
 
         lexer.tokenize(input);
@@ -364,7 +363,67 @@ mod tests {
         lexer.parse().unwrap();
 
         let ctx = &lexer.context;
-        test_var(ctx, "x", Value::Int(10)).unwrap();
-        test_var(ctx, "y", Value::Int(6)).unwrap();
+        test_var(ctx, "x", Value::Int(6)).unwrap();
+    }
+
+    #[test]
+    #[should_panic = "InvalidIdentifier"]
+    fn test_invalid_identifier_leading_digit() {
+        let mut lexer = Lexer::new();
+        
+        let input = indoc! {"
+            let 2x = 2;
+        "}.to_owned();
+
+        lexer.tokenize(input);
+
+        lexer.parse().unwrap();
+    }
+
+    #[test]
+    #[should_panic = "InvalidIdentifier"]
+    fn test_invalid_identifier_non_alphabetic() {
+        let mut lexer = Lexer::new();
+        
+        let input = indoc! {"
+            let ab} = 4;
+        "}.to_owned();
+
+        lexer.tokenize(input);
+
+        lexer.parse().unwrap();
+    }
+
+    #[test]
+    #[should_panic = "VariableWithIdentifierNotFound"]
+    fn test_variable_not_found() {
+        let mut lexer = Lexer::new();
+        
+        let input = indoc! {"
+            let x = a;
+        "}.to_owned();
+
+        lexer.tokenize(input);
+
+        lexer.parse().unwrap();
+
+        let ctx = &lexer.context;
+        test_var(ctx, "x", Value::Int(6)).unwrap();
+    }
+
+    #[test]
+    #[should_panic = "MissingSemicolon"]
+    fn test_missing_semicolon() {
+        let mut lexer = Lexer::new();
+        
+        let input = indoc! {"
+            let x = 4;
+            let y = 3
+            let z = 2;
+        "}.to_owned();
+
+        lexer.tokenize(input);
+
+        lexer.parse().unwrap();
     }
 }
