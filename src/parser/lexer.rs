@@ -1,6 +1,8 @@
-use std::collections::VecDeque;
+use std::{collections::{HashMap, VecDeque}, thread::current};
 
 use thiserror;
+
+use crate::parser::context::{CTContext, CTVariable};
 
 use super::expression::*;
 
@@ -10,11 +12,15 @@ enum ParseError {
     UnknownOperator(char),
     #[error("Invalid token found")]
     InvalidToken,
-    #[error("Unclosed Parenthesis")]
-    UnclosedParenthesis
+    #[error("Unclosed parenthesis")]
+    UnclosedParenthesis,
+    #[error("Invalid identifier")]
+    InvalidIdentifier,
+    #[error("Missing semicolon")]
+    MissingSemicolon,
+    #[error("Expected equals symbol")]
+    EqualsExpected
 }
-
-
 
 fn get_binding_power(op: Operator) -> (f32, f32) {
     match op {
@@ -43,6 +49,7 @@ fn split_words(input: &str) -> Vec<(&str, usize)> {
 
 pub struct Lexer {
     tokens: VecDeque<Token>,
+    context: CTContext,
     input: String,
 }
 
@@ -50,6 +57,7 @@ impl Lexer {
     pub fn new() -> Lexer {
         Lexer {
             input: String::new(),
+            context: CTContext::new(),
             tokens: VecDeque::new(),
         }
     }
@@ -62,15 +70,28 @@ impl Lexer {
         self.tokens.front().unwrap_or(&Token::Eof).clone()
     }
 
+    fn validate_identifier(id: &str) -> Result<(), ParseError> {
+        let first_c = id.chars().nth(0).unwrap();
+        if !first_c.is_digit(10) &&
+            (first_c.is_alphabetic() || first_c == '_') &&
+            id[1..].chars().all(char::is_alphanumeric) {
+            Ok(())
+        } else {
+            Err(ParseError::InvalidIdentifier)
+        }
+    }
+
     fn parse_expression(&mut self, min_bp: f32) -> Result<Expression, ParseError> {
         let mut lhs = match self.next() {
             Token::Number(s) => Expression::Number(s),
             Token::Op(_) => Err(ParseError::InvalidToken)?,
             Token::LeftParenth => { let expr = self.parse_expression(0.0)?;
                 match self.next() {
-                    Token::RightParenth => expr, _ => return Err(ParseError::UnclosedParenthesis)
+                    Token::RightParenth => expr,
+                    _ => return Err(ParseError::UnclosedParenthesis)
                 }
             },
+            Token::Identifier(s) => Expression::Identifier(s),
             _ => Err(ParseError::InvalidToken)?,
         };
 
@@ -79,7 +100,8 @@ impl Lexer {
                 Token::Number(_) => Err(ParseError::InvalidToken)?,
                 Token::Op(op) => op,
                 Token::RightParenth => break,
-                Token::Eof => break,
+                Token::Semicolon => break,
+                Token::Eof => Err(ParseError::MissingSemicolon)?,
                 _ => Err(ParseError::InvalidToken)?,
             };
 
@@ -102,6 +124,35 @@ impl Lexer {
         Ok(lhs)
     }
 
+    fn parse(&mut self) -> Result<(), ParseError> {
+        loop {
+            let token = self.next();
+            if token == Token::Eof {
+                break;
+            }
+
+            match token {
+                Token::Let => {
+                    let next_token = self.next();
+                    if let Token::Identifier(s) = next_token {
+                        let s = unsafe { &*s };
+                        Lexer::validate_identifier(s)?;
+
+                        if self.next() != Token::Equals {
+                            Err(ParseError::EqualsExpected)?
+                        }
+
+                        let expression = self.parse_expression(f32::NEG_INFINITY)?;
+                        debug_assert_eq!(self.next(), Token::Semicolon);
+                        self.context.variables.insert(s.to_owned(), CTVariable::Expression(expression));
+                    } else { unreachable!(); }
+                },
+                _ => { println!("{}", token); todo!() },
+            }
+        };
+        Ok(())
+    }
+
     fn handle_char_no_token(c: char, current_token_kind: &mut TokenKind, char_i: usize, start_i: &mut usize) -> Option<Token> {
         if c.is_numeric() || c == '.' {
             *current_token_kind = TokenKind::Number;
@@ -116,10 +167,16 @@ impl Lexer {
             '|' => return Some(Token::Op(Operator::Pipe)),
             '&' => return Some(Token::Op(Operator::Ampersand)),
             '!' => return Some(Token::Op(Operator::Bang)),
+            '=' => return Some(Token::Equals),
             '(' => return Some(Token::LeftParenth),
             ')' => return Some(Token::RightParenth),
+            ';' => return Some(Token::Semicolon),
             _ => {},
         };
+        if c.is_alphabetic() || c == '_' {
+            *current_token_kind = TokenKind::Identifier;
+            *start_i = char_i;
+        }
 
         None
     }
@@ -129,12 +186,26 @@ impl Lexer {
         self.tokens = VecDeque::new();
         
         // TODO: Use lazy splitting plz
-        let words = split_words(&self.input);
+        let mut words = split_words(&self.input).into_iter();
 
         let mut current_token_kind = TokenKind::None;
         let mut start_i = 0;
 
-        for (word, word_start_i) in words {
+        while let Some((word, word_start_i)) = words.next() {
+            let word_matched = match word {
+                "let" => {
+                    self.tokens.push_back(Token::Let);
+                    let (identifier, _) = words.next().unwrap();
+                    self.tokens.push_back(Token::Identifier(identifier as *const str));
+                    true
+                },
+                _ => false,
+            };
+
+            if word_matched {
+                continue;
+            }
+
             let mut chars = word.chars().peekable();
             let mut char_i = word_start_i;
 
@@ -158,6 +229,15 @@ impl Lexer {
                                 },
                             }
                         },
+                        TokenKind::Identifier => {
+                            match chars.peek() {
+                                Some(peek_c) if peek_c.is_alphanumeric() || *peek_c == '_' => None,
+                                _ => {
+                                    current_token_kind = TokenKind::None;
+                                    Some(Token::Identifier(&self.input[start_i..char_i+1] as *const str))
+                                }
+                            }
+                        }
                         _ => unreachable!(),
                     };
                 }
@@ -172,8 +252,11 @@ impl Lexer {
 
 #[cfg(test)]
 mod tests {
+    use indoc::indoc;
+
     use super::*;
 
+    use crate::parser::context::CTContext;
     use crate::types::{Value, ValueError};
 
     fn expression_helper(input: String, expected: &Value, expected_string: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -185,7 +268,7 @@ mod tests {
 
         assert_eq!(format!("{}", expression), expected_string);
 
-        let value = expression.evaluate()?;
+        let value = expression.evaluate(&CTContext::new(), false)?;
 
         match value.equals(expected) {
             Ok(true) => Ok(()),
@@ -201,29 +284,87 @@ mod tests {
 
     #[test]
     fn test_expression() -> Result<(), Box<dyn std::error::Error>> {
-        let input = "2 + 4 * 3".to_owned();
+        let input = "2 + 4 * 3;".to_owned();
         expression_helper(input, &Value::Int(14), "(+, 2, (*, 4, 3))")
     }
 
     #[test]
     fn test_multidigit() -> Result<(), Box<dyn std::error::Error>> {
-        let input = "4500 / 50".to_owned();
+        let input = "4500 / 50;".to_owned();
         expression_helper(input, &Value::Int(90), "(/, 4500, 50)")
     }
 
     #[test]
     fn test_implicit_conversion() -> Result<(), Box<dyn std::error::Error>> {
-        let input = "2.5 + 3".to_owned();
+        let input = "2.5 + 3;".to_owned();
         expression_helper(input, &Value::Float(5.5), "(+, 2.5, 3)")?;
 
-        let input = "2 + 3.5".to_owned();
+        let input = "2 + 3.5;".to_owned();
         expression_helper(input, &Value::Float(5.5), "(+, 2, 3.5)")
     }
 
     #[test]
     fn test_complex_expression() -> Result<(), Box<dyn std::error::Error>> {
-        let input = "(8 + 42 / 7 * 3) / 2 - 5".to_owned();
+        let input = "(8 + 42 / 7 * 3) / 2 - 5;".to_owned();
         expression_helper(input, &Value::Int(8), "(-, (/, (+, 8, (*, (/, 42, 7), 3)), 2), 5)")
     }
-}
 
+    fn test_var(ctx: &CTContext, name: &str, expected_val: Value) -> Result<(), String> {
+        match ctx.variables.get(name) {
+            Some(original_var) => {
+                let mut var = original_var.clone();
+                var.evaluate(ctx, false).unwrap();
+                match var {
+                    CTVariable::Value(val) => if val.equals(&expected_val).unwrap() {
+                        Ok(())
+                    } else {
+                        Err(format!("Var {} doesn't have expected value: {} != {}", name, val, expected_val))
+                    },
+                    _ => Err("Value not reduced".to_owned()),
+                }
+            },
+            None => Err("Expected var doesn't exist".to_owned()),
+        }
+    }
+
+    #[test]
+    fn test_variable() -> Result<(), Box<dyn std::error::Error>> {
+        let mut lexer = Lexer::new();
+        
+        let input = indoc! {"
+            let x = 5 * 2;
+            let y = 3 * 2;
+            let z = x * y;
+        "}.to_owned();
+
+        lexer.tokenize(input);
+
+        lexer.parse()?;
+
+        let ctx = &lexer.context;
+        test_var(ctx, "x", Value::Int(10)).unwrap();
+        test_var(ctx, "y", Value::Int(6)).unwrap();
+        test_var(ctx, "z", Value::Int(60)).unwrap();
+
+        Ok(())
+    }
+
+    #[test]
+    #[should_panic = "VariableWithIdentifierNotFound"]
+    fn test_variable_not_found() {
+        let mut lexer = Lexer::new();
+        
+        let input = indoc! {"
+            let x = 5 * 2;
+            let y = x * a;
+        "}.to_owned();
+
+        lexer.tokenize(input);
+
+        lexer.parse().unwrap();
+
+        let ctx = &lexer.context;
+        test_var(ctx, "x", Value::Int(10)).unwrap();
+        test_var(ctx, "y", Value::Int(6)).unwrap();
+    }
+}

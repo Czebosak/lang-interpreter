@@ -57,6 +57,8 @@ pub enum ValueError {
     FunctionNotAvailable(&'static str, TypeValue, TypeValue),
     #[error("Division by zero")]
     DivisionByZero,
+    #[error("Variable with identifier not found")]
+    VariableWithIdentifierNotFound,
 }
 
 impl Value {
