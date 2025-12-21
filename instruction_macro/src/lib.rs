@@ -8,7 +8,7 @@ fn helper(ident: &Ident, ty: &Type) -> proc_macro2::TokenStream {
             if let Type::Slice(slice) = &*tr.elem {
                 if let Type::Path(tp) = &*slice.elem {
                     if tp.path.is_ident("u8") {
-                        return quote! { _data.extend_from_slice(#ident); };
+                        return quote! { _data.push(#ident.len() as u8); _data.extend_from_slice(#ident); };
                     }
                 }
             }
@@ -36,12 +36,14 @@ pub fn instruction(input: TokenStream) -> TokenStream {
         Data::Enum(data_enum) => data_enum,
         _ => panic!("MyDerive only works on enums"),
     };
+
+    let enum_kind_name = format_ident!("{}Kind", name);
     
     let match_arms = data.variants.iter().map(|variant| {
         let vname = &variant.ident;
         match &variant.fields {
             Fields::Unit => {
-                quote! { #name::#vname => {}, }
+                quote! { #name::#vname => _data.push(#enum_kind_name::#vname as u8), }
             },
             Fields::Unnamed(fields) => {
                 // Create pattern like: ( _ , _ , _ )
@@ -52,7 +54,7 @@ pub fn instruction(input: TokenStream) -> TokenStream {
                 let x = fields.unnamed.iter().map(|f| {
                     helper(f.ident.as_ref().unwrap(), &f.ty)
                 });
-                quote! { #name::#vname( #( #pats ),* ) => { #( #x )* }, }
+                quote! { #name::#vname( #( #pats ),* ) => { _data.push(#enum_kind_name::#vname as u8); #( #x )* }, }
             },
             Fields::Named(fields) => {
                 // Create pattern like: { a: _, b: _ }
@@ -63,7 +65,7 @@ pub fn instruction(input: TokenStream) -> TokenStream {
                 let x = fields.named.iter().map(|f| {
                     helper(f.ident.as_ref().unwrap(), &f.ty)
                 });
-                quote! { #name::#vname { #( #pats ),* } => { #( #x )* }, }
+                quote! { #name::#vname { #( #pats ),* } => { _data.push(#enum_kind_name::#vname as u8); #( #x )* }, }
             }
         } 
     });
@@ -76,10 +78,9 @@ pub fn instruction(input: TokenStream) -> TokenStream {
     let generics = &input.generics;
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl(); 
 
-    let enum_kind_name = format_ident!("{}Kind", name);
-
     // Example: generate an empty impl
     let expanded = quote! {
+        #[repr(u8)]
         enum #enum_kind_name {
             #( #variants )*
         }
