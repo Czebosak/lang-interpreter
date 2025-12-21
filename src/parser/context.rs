@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ops::{Index, IndexMut};
 
 use crate::types::*;
 use crate::parser::expression::Expression;
@@ -46,3 +47,35 @@ impl CTContext {
         }
     }
 }
+
+pub struct CTContextStack {
+    data: Vec<CTContext>,
+}
+
+impl CTContextStack {
+    pub fn new() -> CTContextStack {
+        CTContextStack { data: Vec::new() }
+    }
+
+    pub fn push(&mut self, ctx: CTContext) {
+        self.data.push(ctx);
+    }
+
+    pub fn pop(&mut self) {
+        let _ = self.data.pop();
+    }
+}
+
+impl Index<usize> for CTContextStack {
+    type Output = CTContext;
+    fn index(&self, i: usize) -> &CTContext {
+        &self.data[i]
+    }
+}
+
+impl IndexMut<usize> for CTContextStack {
+    fn index_mut(&mut self, i: usize) -> &mut CTContext {
+        &mut self.data[i]
+    }
+}
+

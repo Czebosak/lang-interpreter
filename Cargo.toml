@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 thiserror = "2.0.17"
+instruction_macro = {path = "instruction_macro"}
 
 [dev-dependencies]
 indoc = "2.0.7"
