@@ -74,10 +74,7 @@ impl Value {
     }
 
     pub fn is_numerical(&self) -> bool {
-        match self {
-            Value::Int(_) | Value::Float(_) => true,
-            _ => false,
-        }
+        matches!(self, Value::Int(_) | Value::Float(_))
     }
 
     fn numerical_op<IntF, FloatF>(&self, other: &Value, int_op: IntF, float_op: FloatF) -> Value

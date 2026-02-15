@@ -1,8 +1,6 @@
-use std::{collections::{HashMap, VecDeque}, thread::current};
+use std::collections::VecDeque;
 
 use thiserror;
-
-use crate::parser::context::{CTContext, CTVariable};
 
 use super::expression::*;
 
@@ -22,6 +20,12 @@ enum ParseError {
     EqualsExpected
 }
 
+#[derive(Debug)]
+pub enum ParsedToken {
+    DefineVar(String, Option<Expression>),
+    SetVar(String, Expression),
+}
+
 fn get_binding_power(op: Operator) -> (f32, f32) {
     match op {
         Operator::Plus | Operator::Minus => (1.0, 1.1),
@@ -34,7 +38,7 @@ fn split_words(input: &str) -> Vec<(&str, usize)> {
     let mut words = Vec::new();
     
     let mut start_i = 0;
-    for (i, c) in input.chars().enumerate() {
+    for (i, c) in input.char_indices() {
         if c.is_whitespace() {
             words.push((&input[start_i..i], start_i));
             start_i = i + 1;
@@ -49,7 +53,6 @@ fn split_words(input: &str) -> Vec<(&str, usize)> {
 
 pub struct Lexer {
     tokens: VecDeque<Token>,
-    context: CTContext,
     input: String,
 }
 
@@ -57,7 +60,6 @@ impl Lexer {
     pub fn new() -> Lexer {
         Lexer {
             input: String::new(),
-            context: CTContext::new(),
             tokens: VecDeque::new(),
         }
     }
@@ -72,7 +74,7 @@ impl Lexer {
 
     fn validate_identifier(id: &str) -> Result<(), ParseError> {
         let first_c = id.chars().nth(0).unwrap();
-        if !first_c.is_digit(10) &&
+        if !first_c.is_ascii_digit() &&
             (first_c.is_alphabetic() || first_c == '_') &&
             id[1..].chars().all(char::is_alphanumeric) {
             Ok(())
@@ -124,7 +126,9 @@ impl Lexer {
         Ok(lhs)
     }
 
-    fn parse(&mut self) -> Result<(), ParseError> {
+    fn parse(&mut self) -> Result<Vec<ParsedToken>, ParseError> {
+        let mut tokens = Vec::new();
+
         loop {
             let token = self.next();
             if token == Token::Eof {
@@ -144,13 +148,26 @@ impl Lexer {
 
                         let expression = self.parse_expression(f32::NEG_INFINITY)?;
                         debug_assert_eq!(self.next(), Token::Semicolon);
-                        self.context.variables.insert(s.to_owned(), CTVariable::Expression(expression));
+                        tokens.push(ParsedToken::DefineVar(s.to_owned(), Some(expression)));
                     } else { unreachable!(); }
+                },
+                Token::Identifier(s) => {
+                    let s = unsafe { &*s };
+                    Lexer::validate_identifier(s)?;
+                    
+                    if self.next() != Token::Equals {
+                        Err(ParseError::EqualsExpected)?
+                    }
+
+                    let expression = self.parse_expression(f32::NEG_INFINITY)?;
+                    debug_assert_eq!(self.next(), Token::Semicolon);
+                    tokens.push(ParsedToken::SetVar(s.to_owned(), expression));
                 },
                 _ => { println!("{}", token); todo!() },
             }
         };
-        Ok(())
+
+        Ok(tokens)
     }
 
     fn handle_char_no_token(c: char, current_token_kind: &mut TokenKind, char_i: usize, start_i: &mut usize) -> Option<Token> {
@@ -333,18 +350,17 @@ mod tests {
         
         let input = indoc! {"
             let x = 5 * 2;
+            x = 4;
             let y = 3 * 2;
-            let z = x * y;
         "}.to_owned();
 
         lexer.tokenize(input);
 
-        lexer.parse()?;
+        let tokens = lexer.parse()?;
 
-        let ctx = &lexer.context;
-        test_var(ctx, "x", Value::Int(10)).unwrap();
-        test_var(ctx, "y", Value::Int(6)).unwrap();
-        test_var(ctx, "z", Value::Int(60)).unwrap();
+        println!("{:?}", tokens);
+
+        panic!("ss");
 
         Ok(())
     }
